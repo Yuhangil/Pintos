@@ -251,7 +251,7 @@ thread_sleep(int64_t ticks)
     cur = thread_current();
     ASSERT(cur != idle_thread);
 
-    update_next_to_wake(cur->wake_up_tick = ticks);
+    update_next_tick_to_wake(cur->wake_up_tick = ticks);
 
     list_push_back(&block_list, &cur->elem);
 
@@ -404,8 +404,31 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  return ( thread_current ()->priority != thread_current()->donated_priority )? thread_current()->donated_priority : thread_current()->priority;
 }
+int thread_priority_donate(void)
+{
+    struct thread* t = thread_current();
+    struct thread* k;
+    struct list_elem * n;
+    int max = 0;
+
+    n = list_begin(&ready_list);
+    while(n != list_end(&ready_list))
+    {
+	k = list_entry(n, struct thread, elem);
+	if(t->priority < k->priority)
+	{
+	    if(k->priority > max)
+	    {
+		max = k->priority;
+	    }
+	}
+	n = list_next(n);
+    }
+    return max;
+}
+
 
 /* Sets the current thread's nice value to NICE. */
 void
@@ -522,6 +545,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->donated_priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 }
