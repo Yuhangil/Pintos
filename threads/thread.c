@@ -211,7 +211,10 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
-
+  if(priority > thread_current()->priority)
+  {
+    thread_yield();
+  }
   return tid;
 }
 
@@ -299,7 +302,9 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  
+  list_insert_ordered(&ready_list, &t->elem, ready_list_cmp, NULL);
+  //list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -360,6 +365,14 @@ thread_exit (void)
 
 /* Yields the CPU.  The current thread is not put to sleep and
    may be scheduled again immediately at the scheduler's whim. */
+
+
+bool ready_list_cmp(const struct list_elem *a, const struct list_elem *b, void *aux)
+{
+    	struct thread *aa = list_entry(a, struct thread, elem), 
+		      *bb = list_entry(b, struct thread, elem);
+	return aa->priority > bb->priority;
+}
 void
 thread_yield (void) 
 {
@@ -370,7 +383,8 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    list_insert_ordered(&ready_list, &cur->elem, ready_list_cmp, NULL);
+    //list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -404,29 +418,7 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void) 
 {
-  return ( thread_current ()->priority != thread_current()->donated_priority )? thread_current()->donated_priority : thread_current()->priority;
-}
-int thread_priority_donate(void)
-{
-    struct thread* t = thread_current();
-    struct thread* k;
-    struct list_elem * n;
-    int max = 0;
-
-    n = list_begin(&ready_list);
-    while(n != list_end(&ready_list))
-    {
-	k = list_entry(n, struct thread, elem);
-	if(t->priority < k->priority)
-	{
-	    if(k->priority > max)
-	    {
-		max = k->priority;
-	    }
-	}
-	n = list_next(n);
-    }
-    return max;
+    return thread_current()->priority;
 }
 
 
@@ -545,7 +537,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
-  t->donated_priority = priority;
+  //t->donated_priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 }
@@ -572,9 +564,13 @@ static struct thread *
 next_thread_to_run (void) 
 {
   if (list_empty (&ready_list))
+  {
     return idle_thread;
+  }
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  {
+    return list_entry (list_pop_front (&ready_list), struct thread, elem); 
+  }
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -641,7 +637,7 @@ schedule (void)
 
   ASSERT (cur->status != THREAD_RUNNING);
   ASSERT (is_thread (next));
-  
+ 
   if (cur != next)
     prev = switch_threads (cur, next);
   thread_schedule_tail (prev);
