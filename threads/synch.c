@@ -1,4 +1,5 @@
 /* This file is derived from source code for the Nachos
+   
    instructional operating system.  The Nachos copyright notice
    is reproduced in full below. */
 
@@ -67,10 +68,11 @@ sema_down (struct semaphore *sema)
 
   old_level = intr_disable ();
   while (sema->value == 0) 
-    {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+  {
+      list_insert_ordered (&sema->waiters, &thread_current ()->elem, ready_list_cmp, NULL);
+      sema->max_priority_waiters = list_entry(list_front(&sema->waiters), struct thread, elem)->priority;
       thread_block ();
-    }
+  }
   sema->value--;
   intr_set_level (old_level);
 }
@@ -196,8 +198,16 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  struct thread* cur = thread_current();
+
+  cur->trying_lock = lock;
+
+  donation(lock);
+
+  sema_down(&lock->semaphore);
+  lock->holder = cur;
+  list_insert_ordered(&cur->holding_locks, &cur->trying_lock->elem, high_priority_lock, NULL);
+  cur->trying_lock = NULL;
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -230,6 +240,8 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
+  list_remove(&lock->elem);
+  donation_rollback(lock);
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
@@ -334,4 +346,86 @@ cond_broadcast (struct condition *cond, struct lock *lock)
 
   while (!list_empty (&cond->waiters))
     cond_signal (cond, lock);
+}
+
+void
+donation(struct lock *lock)
+{
+    if(lock->holder != NULL)
+    {
+	struct thread* lock_owner = lock->holder;
+	struct thread* cur = thread_current();
+
+	if(lock_owner->priority < cur->priority)
+	{
+	    if(lock_owner->trying_lock != NULL )
+	    {
+		if(lock_owner->donated_level == 0)
+		{
+		    lock_owner->original_priority = lock_owner->priority;
+		}
+		lock_owner->priority = cur->priority;
+		lock_owner->donated_level++;
+
+		donation(lock_owner->trying_lock);
+	    }
+	    else
+	    {
+		if(lock_owner->donated_level == 0)
+		{
+		    lock_owner->original_priority = lock_owner->priority;
+		}
+
+		lock_owner->priority = cur->priority;
+		lock_owner->donated_level++;
+	    }
+	}
+    }
+}
+
+void
+donation_rollback(struct lock *lock)
+{
+    struct thread* cur = thread_current();
+    if(cur->donated_level > 0 )
+    {
+	struct semaphore sema = lock->semaphore;
+	struct list waiters_ = sema.waiters;
+
+	if(!list_empty(&waiters_))
+	{
+	    struct thread* doner_thread = list_entry(list_front(&waiters_), struct thread, elem);
+
+	    if(cur->priority == doner_thread->priority)
+	    {
+		if(cur->donated_level == 1)
+		{
+		    cur->priority = cur->original_priority;
+		    cur->donated_level--;
+		}
+		else
+		{
+		    if(!list_empty(&cur->holding_locks))
+		    {
+			struct semaphore sema_ = list_entry(list_front(&cur->holding_locks), struct lock, elem)->semaphore;
+			cur->priority = sema_.max_priority_waiters;
+			cur->donated_level--;
+		    }
+		    else
+		    {
+			cur->priority = cur->original_priority;
+			cur->donated_level--;
+		    }
+		}
+	    }
+	}
+    }
+}
+
+bool high_priority_lock(struct list_elem *a, struct list_elem *b, void* aux)
+{
+  const struct lock *a_ = list_entry(a, struct lock, elem);
+  const struct lock *b_ = list_entry(b, struct lock, elem);
+
+  return a_->holder->priority > b_->holder->priority;
 }
